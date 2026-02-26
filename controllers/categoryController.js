@@ -1,16 +1,18 @@
-const categoryData = require("../data/categoryData");
+const db = require("../config/db");
 
 /* ===============================
    GET ALL
 ================================ */
-exports.getAllCategories = (req, res) => {
+exports.getAllCategories = async (req, res) => {
   try {
-    const categories = categoryData.getAll();
+    const result = await db.query(
+      "SELECT id, name FROM categories ORDER BY id ASC"
+    );
 
     return res.status(200).json({
       success: true,
-      total: categories.length,
-      data: categories,
+      total: result.rows.length,
+      data: result.rows,
     });
   } catch (error) {
     return res.status(500).json({
@@ -24,7 +26,7 @@ exports.getAllCategories = (req, res) => {
 /* ===============================
    GET BY ID
 ================================ */
-exports.getCategoryById = (req, res) => {
+exports.getCategoryById = async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -35,9 +37,12 @@ exports.getCategoryById = (req, res) => {
       });
     }
 
-    const category = categoryData.getById(id);
+    const result = await db.query(
+      "SELECT id, name FROM categories WHERE id = $1",
+      [id]
+    );
 
-    if (!category) {
+    if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Category tidak ditemukan",
@@ -46,7 +51,7 @@ exports.getCategoryById = (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: category,
+      data: result.rows[0],
     });
   } catch (error) {
     return res.status(500).json({
@@ -60,7 +65,7 @@ exports.getCategoryById = (req, res) => {
 /* ===============================
    CREATE
 ================================ */
-exports.createCategory = (req, res) => {
+exports.createCategory = async (req, res) => {
   try {
     const { name } = req.body;
 
@@ -73,24 +78,29 @@ exports.createCategory = (req, res) => {
 
     const trimmedName = name.trim();
 
-    // Cek duplicate
-    const existing = categoryData
-      .getAll()
-      .find((c) => c.name.toLowerCase() === trimmedName.toLowerCase());
+    // cek duplicate (case-insensitive)
+    const check = await db.query(
+      "SELECT id FROM categories WHERE LOWER(name) = LOWER($1)",
+      [trimmedName]
+    );
 
-    if (existing) {
+    if (check.rows.length > 0) {
       return res.status(400).json({
         success: false,
         message: "Category sudah ada",
       });
     }
 
-    const newCategory = categoryData.create(trimmedName);
+    // insert tanpa id (id auto increment)
+    const result = await db.query(
+      "INSERT INTO categories (name) VALUES ($1) RETURNING id, name",
+      [trimmedName]
+    );
 
     return res.status(201).json({
       success: true,
       message: "Category berhasil dibuat",
-      data: newCategory,
+      data: result.rows[0],
     });
   } catch (error) {
     return res.status(500).json({
@@ -104,7 +114,7 @@ exports.createCategory = (req, res) => {
 /* ===============================
    UPDATE
 ================================ */
-exports.updateCategory = (req, res) => {
+exports.updateCategory = async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { name } = req.body;
@@ -125,25 +135,25 @@ exports.updateCategory = (req, res) => {
 
     const trimmedName = name.trim();
 
-    // Cek duplicate selain dirinya sendiri
-    const duplicate = categoryData
-      .getAll()
-      .find(
-        (c) =>
-          c.name.toLowerCase() === trimmedName.toLowerCase() &&
-          c.id !== id
-      );
+    // cek duplicate selain dirinya
+    const duplicate = await db.query(
+      "SELECT id FROM categories WHERE LOWER(name) = LOWER($1) AND id != $2",
+      [trimmedName, id]
+    );
 
-    if (duplicate) {
+    if (duplicate.rows.length > 0) {
       return res.status(400).json({
         success: false,
         message: "Nama category sudah digunakan",
       });
     }
 
-    const updated = categoryData.update(id, trimmedName);
+    const result = await db.query(
+      "UPDATE categories SET name = $1 WHERE id = $2 RETURNING id, name",
+      [trimmedName, id]
+    );
 
-    if (!updated) {
+    if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Category tidak ditemukan",
@@ -153,7 +163,7 @@ exports.updateCategory = (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Category berhasil diupdate",
-      data: updated,
+      data: result.rows[0],
     });
   } catch (error) {
     return res.status(500).json({
@@ -167,7 +177,7 @@ exports.updateCategory = (req, res) => {
 /* ===============================
    DELETE
 ================================ */
-exports.deleteCategory = (req, res) => {
+exports.deleteCategory = async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -178,9 +188,12 @@ exports.deleteCategory = (req, res) => {
       });
     }
 
-    const deleted = categoryData.remove(id);
+    const result = await db.query(
+      "DELETE FROM categories WHERE id = $1 RETURNING id, name",
+      [id]
+    );
 
-    if (!deleted) {
+    if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Category tidak ditemukan",
@@ -190,7 +203,7 @@ exports.deleteCategory = (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Category berhasil dihapus",
-      data: deleted,
+      data: result.rows[0],
     });
   } catch (error) {
     return res.status(500).json({

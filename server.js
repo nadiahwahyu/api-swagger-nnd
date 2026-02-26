@@ -4,51 +4,45 @@ const cors = require("cors");
 const path = require("path");
 const swaggerUi = require("swagger-ui-express");
 const swaggerJsDoc = require("swagger-jsdoc");
+const { minioClient, bucketName } = require("./config/minioClient");
 
-// IMPORT ROUTES
+// Import Routes
 const postRoutes = require("./routes/postRoutes");
 const categoryRoutes = require("./routes/categoryRoutes");
 const authRoutes = require("./routes/authRoutes");
 
 const app = express();
+const PORT = process.env.PORT || 5000;
 
-/* =============================
-   MIDDLEWARE
-============================= */
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-/* =============================
-   TEST ROUTE
-============================= */
-app.get("/", (req, res) => {
-  res.json({
-    success: true,
-    message: "API Running Successfully 🚀",
-  });
-});
+// Koneksi MinIO
+const ensureBucketExists = async () => {
+  try {
+    const exists = await minioClient.bucketExists(bucketName);
+    if (!exists) {
+      await minioClient.makeBucket(bucketName, "us-east-1");
+      console.log(`✅ Bucket "${bucketName}" siap.`);
+    }
+  } catch (err) {
+    console.log("⚠️ Cek MinIO: Pastikan server MinIO sudah jalan.");
+  }
+};
+ensureBucketExists();
 
-/* =============================
-   SWAGGER SETUP
-============================= */
+/* ============================================================
+    SWAGGER CONFIGURATION (FULL VERSION)
+============================================================ */
 const swaggerOptions = {
   definition: {
-    openapi: "3.0.0",
-    info: {
-      title: "Post API",
-      version: "1.0.0",
-      description:
-        "API Dokumentasi untuk Posts, Categories dan Authentication",
+    openapi: '3.0.0',
+    info: { 
+      title: 'Latihan API Fullstack', 
+      version: '1.0.0' 
     },
-    servers: [
-      {
-        url: `http://localhost:${process.env.PORT || 5000}`,
-      },
-    ],
-
-    // 🔥 JWT CONFIGURATION (INI YANG BIKIN AUTHORIZE MUNCUL)
+    servers: [{ url: `http://localhost:${PORT}/api` }],
     components: {
       securitySchemes: {
         bearerAuth: {
@@ -58,80 +52,167 @@ const swaggerOptions = {
         },
       },
     },
+    paths: {
+      // --- AUTH ---
+      "/auth/register": {
+        post: {
+          tags: ["Auth"],
+          summary: "Register User Baru",
+          requestBody: {
+            content: { "application/json": { schema: { type: "object", properties: { email: { type: "string" }, password: { type: "string" } } } } }
+          },
+          responses: { 201: { description: "Berhasil" } }
+        }
+      },
+      "/auth/login": {
+        post: {
+          tags: ["Auth"],
+          summary: "Login User",
+          requestBody: {
+            content: { "application/json": { schema: { type: "object", properties: { email: { type: "string" }, password: { type: "string" } } } } }
+          },
+          responses: { 200: { description: "Berhasil" } }
+        }
+      },
 
-    // 🔥 SEMUA ENDPOINT DEFAULT PAKAI TOKEN
-    security: [
-      {
-        bearerAuth: [],
+      // --- POSTS ---
+      "/posts": {
+        get: {
+          tags: ["Posts"],
+          summary: "Ambil semua posts",
+          responses: { 200: { description: "Berhasil" } }
+        },
+        post: {
+          tags: ["Posts"],
+          summary: "Buat post baru",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              "multipart/form-data": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    judul: { type: "string" },
+                    isi: { type: "string" },
+                    category_id: { type: "integer" },
+                    gambar: { type: "string", format: "binary" }
+                  }
+                }
+              }
+            }
+          },
+          responses: { 201: { description: "Berhasil" } }
+        }
       },
-    ],
+      "/posts/{id}": {
+        get: {
+          tags: ["Posts"],
+          summary: "Ambil post per ID",
+          parameters: [{ in: "path", name: "id", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Berhasil" } }
+        },
+        put: {
+          tags: ["Posts"],
+          summary: "Update post",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ in: "path", name: "id", required: true, schema: { type: "integer" } }],
+          requestBody: {
+            content: {
+              "multipart/form-data": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    judul: { type: "string" },
+                    isi: { type: "string" },
+                    category_id: { type: "integer" },
+                    gambar: { type: "string", format: "binary" }
+                  }
+                }
+              }
+            }
+          },
+          responses: { 200: { description: "Berhasil" } }
+        },
+        delete: {
+          tags: ["Posts"],
+          summary: "Hapus post",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ in: "path", name: "id", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Berhasil" } }
+        }
+      },
 
-    // 🔥 URUTAN TAG (CATEGORIES PALING BAWAH)
-    tags: [
-      {
-        name: "Authentication",
-        description: "Login dan Register User",
+      // --- CATEGORIES (INI YANG KAMU MINTA) ---
+      "/categories": {
+        get: {
+          tags: ["Categories"],
+          summary: "Ambil semua kategori",
+          responses: { 200: { description: "Berhasil" } }
+        },
+        post: {
+          tags: ["Categories"],
+          summary: "Buat kategori baru",
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    nama_category: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: { 201: { description: "Berhasil" } }
+        }
       },
-      {
-        name: "Posts",
-        description: "Manajemen Data Posts",
-      },
-      {
-        name: "Categories",
-        description: "Manajemen Data Categories",
-      },
-    ],
+      "/categories/{id}": {
+        get: {
+          tags: ["Categories"],
+          summary: "Ambil kategori per ID",
+          parameters: [{ in: "path", name: "id", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Berhasil" } }
+        },
+        put: {
+          tags: ["Categories"],
+          summary: "Update kategori",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ in: "path", name: "id", required: true, schema: { type: "integer" } }],
+          requestBody: {
+            content: { "application/json": { schema: { type: "object", properties: { nama_category: { type: "string" } } } } }
+          },
+          responses: { 200: { description: "Berhasil" } }
+        },
+        delete: {
+          tags: ["Categories"],
+          summary: "Hapus kategori",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ in: "path", name: "id", required: true, schema: { type: "integer" } }],
+          responses: { 200: { description: "Berhasil" } }
+        }
+      }
+    }
   },
-
-  apis: [path.join(__dirname, "routes", "*.js")],
+  apis: [], 
 };
 
 const swaggerSpec = swaggerJsDoc(swaggerOptions);
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-app.use(
-  "/api-docs",
-  swaggerUi.serve,
-  swaggerUi.setup(swaggerSpec, {
-    swaggerOptions: {
-      tagsSorter: "alpha",
-      operationsSorter: "alpha",
-    },
-  })
-);
-
-/* =============================
-   ROUTES
-============================= */
-app.use("/api/auth", authRoutes);
+// Bind Routes
 app.use("/api/posts", postRoutes);
 app.use("/api/categories", categoryRoutes);
+app.use("/api/auth", authRoutes);
 
-/* =============================
-   404 HANDLER
-============================= */
+app.get("/", (req, res) => res.json({ message: "API Running" }));
+
 app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "Route tidak ditemukan",
-  });
+  res.status(404).json({ success: false, message: "Route tidak ditemukan" });
 });
-
-/* =============================
-   ERROR HANDLER
-============================= */
-app.use((err, req, res, next) => {
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || "Terjadi kesalahan server",
-  });
-});
-
-/* =============================
-   SERVER
-============================= */
-const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server jalan di http://localhost:${PORT}`);
-  console.log(`📄 Swagger Docs di http://localhost:${PORT}/api-docs`);
+  console.log(`🚀 Server ON: http://localhost:${PORT}`);
+  console.log(`📄 Swagger: http://localhost:${PORT}/api-docs`);
 });
