@@ -4,18 +4,13 @@ const path = require("path");
 
 /* =============================
    HELPER: GENERATE IMAGE URL
-   Memastikan URL sesuai dengan 
-   struktur MinIO port 9000
 ============================= */
 const generateImageUrl = (imageName) => {
   if (!imageName) return null;
-  
-  // Ambil dari env atau default ke localhost:9000
-  const host = process.env.MINIO_ENDPOINT || "localhost";
+  // Menggunakan 127.0.0.1 agar lebih stabil di lingkungan lokal
+  const host = process.env.MINIO_ENDPOINT || "127.0.0.1";
   const port = process.env.MINIO_PORT || 9000;
   const protocol = process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http';
-  
-  // Format: http://localhost:9000/postbucket/namafile.webp
   return `${protocol}://${host}:${port}/${bucketName}/${imageName}`;
 };
 
@@ -24,8 +19,9 @@ const generateImageUrl = (imageName) => {
 ============================= */
 exports.getAllPosts = async (req, res) => {
   try {
+    // Mengambil data posts dan join dengan categories
     const result = await db.query(`
-      SELECT posts.*, categories.nama_category AS category_name
+      SELECT posts.*, categories.name AS category_name
       FROM posts
       LEFT JOIN categories ON posts.category_id = categories.id
       ORDER BY posts.id DESC
@@ -33,11 +29,13 @@ exports.getAllPosts = async (req, res) => {
 
     const data = result.rows.map(post => ({
       ...post,
-      image_url: generateImageUrl(post.image),
+      // Menggunakan post.gambar sesuai struktur tabel SQL Anda
+      image_url: generateImageUrl(post.gambar),
     }));
 
     res.status(200).json({ success: true, data });
   } catch (err) {
+    console.error("❌ ERROR DETIL (getAllPosts):", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -49,7 +47,7 @@ exports.getPostById = async (req, res) => {
   try {
     const { id } = req.params;
     const result = await db.query(`
-      SELECT posts.*, categories.nama_category AS category_name
+      SELECT posts.*, categories.name AS category_name
       FROM posts
       LEFT JOIN categories ON posts.category_id = categories.id
       WHERE posts.id = $1
@@ -61,17 +59,18 @@ exports.getPostById = async (req, res) => {
 
     const post = {
       ...result.rows[0],
-      image_url: generateImageUrl(result.rows[0].image),
+      image_url: generateImageUrl(result.rows[0].gambar),
     };
 
     res.status(200).json({ success: true, data: post });
   } catch (err) {
+    console.error("❌ ERROR DETIL (getPostById):", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
 /* =============================
-   CREATE POST (UPLOAD FIX)
+   CREATE POST
 ============================= */
 exports.createPost = async (req, res) => {
   try {
@@ -83,12 +82,11 @@ exports.createPost = async (req, res) => {
 
     let imageName = null;
 
-    // Logic Upload ke MinIO
     if (req.file) {
       const ext = path.extname(req.file.originalname);
+      // Membuat nama file unik untuk MinIO
       imageName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${ext}`;
 
-      // Eksekusi upload buffer ke MinIO
       await minioClient.putObject(
         bucketName,
         imageName,
@@ -96,12 +94,12 @@ exports.createPost = async (req, res) => {
         req.file.size,
         { "Content-Type": req.file.mimetype }
       );
-      console.log(`✅ File ${imageName} berhasil masuk ke MinIO`);
+      console.log(`✅ File ${imageName} berhasil diunggah ke MinIO`);
     }
 
-    // Simpan ke Database (PostgreSQL format)
+    // Menggunakan kolom 'gambar' sesuai perintah SQL CREATE TABLE sebelumnya
     const result = await db.query(`
-      INSERT INTO posts (judul, isi, image, category_id)
+      INSERT INTO posts (judul, isi, gambar, category_id)
       VALUES ($1, $2, $3, $4)
       RETURNING *
     `, [judul, isi, imageName, category_id]);
@@ -111,11 +109,11 @@ exports.createPost = async (req, res) => {
       message: "Post berhasil dibuat",
       data: { 
         ...result.rows[0], 
-        image_url: generateImageUrl(result.rows[0].image) 
+        image_url: generateImageUrl(result.rows[0].gambar) 
       },
     });
   } catch (err) {
-    console.error("❌ Error Create Post:", err.message);
+    console.error("❌ ERROR DETIL (createPost):", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -133,7 +131,7 @@ exports.updatePost = async (req, res) => {
       return res.status(404).json({ success: false, message: "Post tidak ditemukan" });
     }
 
-    let imageName = existingPost.rows[0].image;
+    let imageName = existingPost.rows[0].gambar;
 
     if (req.file) {
       const ext = path.extname(req.file.originalname);
@@ -148,12 +146,12 @@ exports.updatePost = async (req, res) => {
         { "Content-Type": req.file.mimetype }
       );
 
-      // Hapus file lama dari MinIO agar tidak nyampah
-      if (existingPost.rows[0].image) {
+      // Hapus file lama jika ada untuk menghemat ruang di MinIO
+      if (existingPost.rows[0].gambar) {
         try {
-          await minioClient.removeObject(bucketName, existingPost.rows[0].image);
+          await minioClient.removeObject(bucketName, existingPost.rows[0].gambar);
         } catch (e) {
-          console.warn("File lama tidak ditemukan di storage, skip.");
+          console.warn("⚠️ Gagal menghapus file lama di MinIO");
         }
       }
       imageName = newImageName;
@@ -163,7 +161,7 @@ exports.updatePost = async (req, res) => {
       UPDATE posts
       SET judul = COALESCE($1, judul),
           isi = COALESCE($2, isi),
-          image = $3,
+          gambar = $3,
           category_id = COALESCE($4, category_id)
       WHERE id = $5
       RETURNING *
@@ -174,10 +172,11 @@ exports.updatePost = async (req, res) => {
       message: "Post berhasil diupdate",
       data: { 
         ...result.rows[0], 
-        image_url: generateImageUrl(result.rows[0].image) 
+        image_url: generateImageUrl(result.rows[0].gambar) 
       },
     });
   } catch (err) {
+    console.error("❌ ERROR DETIL (updatePost):", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -194,20 +193,21 @@ exports.deletePost = async (req, res) => {
       return res.status(404).json({ success: false, message: "Post tidak ditemukan" });
     }
 
-    const imageName = postResult.rows[0].image;
+    const imageName = postResult.rows[0].gambar;
 
-    // Hapus file dari MinIO
+    // Hapus gambar di MinIO sebelum menghapus record di database
     if (imageName) {
       try {
         await minioClient.removeObject(bucketName, imageName);
       } catch (e) {
-        console.warn("Gagal hapus file di storage, lanjut hapus DB.");
+        console.warn("⚠️ Gagal menghapus file di MinIO");
       }
     }
 
     await db.query("DELETE FROM posts WHERE id = $1", [id]);
     res.status(200).json({ success: true, message: "Post berhasil dihapus" });
   } catch (err) {
+    console.error("❌ ERROR DETIL (deletePost):", err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };

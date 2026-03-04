@@ -1,58 +1,56 @@
 const bcrypt = require("bcrypt");
-const {
-  generateAccessToken,
-  generateRefreshToken,
-} = require("../utils/generateToken");
+const { generateAccessToken, generateRefreshToken } = require("../utils/generateToken");
+const { minioClient, bucketName } = require("../config/minioClient");
 
-// Dummy user (sementara)
+// Dummy user (Ganti ke database PostgreSQL jika sudah siap)
 let users = [];
 
 exports.register = async (req, res) => {
-  const { email, password } = req.body;
+  try {
+    // AMBIL 'name', BUKAN 'username' (sesuaikan dengan frontend)
+    const { name, email, password } = req.body;
+    let avatarUrl = null;
 
-  const hashedPassword = await bcrypt.hash(password, 10);
+    // Logika Upload ke MinIO
+    if (req.file) {
+      const file = req.file;
+      const fileName = `avatars/${Date.now()}_${file.originalname.replace(/\s+/g, '_')}`;
 
-  const newUser = {
-    id: Date.now(),
-    email,
-    password: hashedPassword,
-  };
+      await minioClient.putObject(
+        bucketName,
+        fileName,
+        file.buffer,
+        file.size,
+        { "Content-Type": file.mimetype }
+      );
 
-  users.push(newUser);
+      avatarUrl = `http://127.0.0.1:9000/${bucketName}/${fileName}`;
+    }
 
-  res.status(201).json({
-    success: true,
-    message: "Register berhasil",
-  });
-};
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-exports.login = async (req, res) => {
-  const { email, password } = req.body;
+    const newUser = {
+      id: Date.now(),
+      name, // simpan nama
+      email,
+      password: hashedPassword,
+      avatar: avatarUrl,
+    };
 
-  const user = users.find((u) => u.email === email);
+    users.push(newUser);
+    console.log("✅ User Baru Terdaftar:", newUser);
 
-  if (!user) {
-    return res.status(400).json({
+    res.status(201).json({
+      success: true,
+      message: "Register berhasil ke MinIO",
+      avatarUrl
+    });
+
+  } catch (error) {
+    console.error("❌ Register Error:", error.message);
+    res.status(500).json({
       success: false,
-      message: "User tidak ditemukan",
+      message: "Internal Server Error: " + error.message
     });
   }
-
-  const isMatch = await bcrypt.compare(password, user.password);
-
-  if (!isMatch) {
-    return res.status(400).json({
-      success: false,
-      message: "Password salah",
-    });
-  }
-
-  const accessToken = generateAccessToken(user);
-  const refreshToken = generateRefreshToken(user);
-
-  res.status(200).json({
-    success: true,
-    accessToken,
-    refreshToken,
-  });
 };

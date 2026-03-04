@@ -4,6 +4,8 @@ const cors = require("cors");
 const path = require("path");
 const swaggerUi = require("swagger-ui-express");
 const swaggerJsDoc = require("swagger-jsdoc");
+
+// Pastikan file ini mengekspor { minioClient, bucketName }
 const { minioClient, bucketName } = require("./config/minioClient");
 
 // Import Routes
@@ -18,18 +20,22 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Koneksi MinIO
+// Koneksi MinIO (Perbaikan: memanggil fungsi inisialisasi dengan benar)
 const ensureBucketExists = async () => {
   try {
     const exists = await minioClient.bucketExists(bucketName);
     if (!exists) {
       await minioClient.makeBucket(bucketName, "us-east-1");
       console.log(`✅ Bucket "${bucketName}" siap.`);
+    } else {
+      console.log(`ℹ️ MinIO: Bucket "${bucketName}" sudah ada.`);
     }
   } catch (err) {
-    console.log("⚠️ Cek MinIO: Pastikan server MinIO sudah jalan.");
+    console.error("⚠️ Cek MinIO: Pastikan server MinIO sudah jalan.");
+    console.error("Detail Error:", err.message);
   }
 };
+// Menjalankan pengecekan bucket saat server start
 ensureBucketExists();
 
 /* ============================================================
@@ -142,7 +148,7 @@ const swaggerOptions = {
         }
       },
 
-      // --- CATEGORIES (INI YANG KAMU MINTA) ---
+      // --- CATEGORIES ---
       "/categories": {
         get: {
           tags: ["Categories"],
