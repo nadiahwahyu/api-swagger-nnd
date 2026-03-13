@@ -1,56 +1,82 @@
-const bcrypt = require("bcrypt");
-const { generateAccessToken, generateRefreshToken } = require("../utils/generateToken");
-const { minioClient, bucketName } = require("../config/minioClient");
+const argon2 = require("argon2"); // Pastikan pakai argon2 agar cocok dengan Register
+const jwt = require("jsonwebtoken");
+const pool = require("../config/db"); 
 
-// Dummy user (Ganti ke database PostgreSQL jika sudah siap)
-let users = [];
-
-exports.register = async (req, res) => {
+/**
+ * PENTING: Menggunakan query SQL 'LOWER(email)' agar pencarian bersifat 
+ * Case-Insensitive, cocok untuk database PostgreSQL.
+ */
+exports.login = async (req, res) => {
   try {
-    // AMBIL 'name', BUKAN 'username' (sesuaikan dengan frontend)
-    const { name, email, password } = req.body;
-    let avatarUrl = null;
+    const { email, password } = req.body;
 
-    // Logika Upload ke MinIO
-    if (req.file) {
-      const file = req.file;
-      const fileName = `avatars/${Date.now()}_${file.originalname.replace(/\s+/g, '_')}`;
-
-      await minioClient.putObject(
-        bucketName,
-        fileName,
-        file.buffer,
-        file.size,
-        { "Content-Type": file.mimetype }
-      );
-
-      avatarUrl = `http://127.0.0.1:9000/${bucketName}/${fileName}`;
+    // 1. Validasi Input
+    if (!email || !password) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Email dan password wajib diisi." 
+      });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // 2. Cari user di DATABASE dengan query manual
+    const cleanEmail = email.trim().toLowerCase();
+    
+    // Menggunakan pool.query (SQL Mentah)
+    const result = await pool.query(
+      "SELECT * FROM users WHERE LOWER(email) = $1", 
+      [cleanEmail]
+    );
 
-    const newUser = {
-      id: Date.now(),
-      name, // simpan nama
-      email,
-      password: hashedPassword,
-      avatar: avatarUrl,
-    };
+    const user = result.rows[0]; 
 
-    users.push(newUser);
-    console.log("✅ User Baru Terdaftar:", newUser);
+    if (!user) {
+      return res.status(401).json({ 
+        success: false, 
+        message: "Email tidak ditemukan atau belum terdaftar." 
+      });
+    }
 
-    res.status(201).json({
+    // 3. Bandingkan password menggunakan argon2.verify
+    const isMatch = await argon2.verify(user.password, password);
+
+    if (!isMatch) {
+      return res.status(401).json({ 
+        success: false, 
+        message: "Password salah!" 
+      });
+    }
+
+    // 4. GENERATE TOKEN
+    const secretKey = process.env.JWT_SECRET || "rahasia_muslim_2026"; 
+
+    const token = jwt.sign(
+      { 
+        id: user.id, 
+        email: user.email, 
+        role: user.role || "user" 
+      },
+      secretKey, 
+      { expiresIn: process.env.JWT_ACCESS_EXPIRATION || "1d" }
+    );
+
+    // 5. Kirim Response Sukses
+    res.status(200).json({
       success: true,
-      message: "Register berhasil ke MinIO",
-      avatarUrl
+      token: token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        role: user.role || "user" 
+      }
     });
 
   } catch (error) {
-    console.error("❌ Register Error:", error.message);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error: " + error.message
+    console.error("❌ Login Error Detail:", error.message);
+    res.status(500).json({ 
+      success: false, 
+      message: "Internal Server Error: " + error.message 
     });
   }
 };

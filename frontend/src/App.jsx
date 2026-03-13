@@ -16,6 +16,17 @@ import EditSholat from "./pages/EditSholat";
 import TambahSholat from "./pages/TambahSholat";
 
 /* ============================================================
+    PROTECTED ROUTE (Untuk User yang Sudah Login)
+   ============================================================ */
+/**
+ * Rute ini memastikan user setidaknya memiliki token untuk akses halaman tertentu.
+ */
+const ProtectedRoute = ({ children }) => {
+  const token = localStorage.getItem("token");
+  return token ? children : <Navigate to="/login" replace />;
+};
+
+/* ============================================================
     ADMIN ROUTE (Proteksi Ketat untuk Admin)
    ============================================================ */
 /**
@@ -31,13 +42,18 @@ const AdminRoute = ({ children }) => {
     return children;
   }
 
-  // Jika tamu mencoba akses, lempar ke halaman login
+  // Jika tamu atau user biasa mencoba akses, lempar ke halaman login
+  console.warn("Akses ditolak: Anda harus login sebagai admin.");
   return <Navigate to="/login" replace />;
 };
 
 /* ============================================================
     PUBLIC ROUTE (Hanya untuk tamu/sebelum login)
    ============================================================ */
+/**
+ * Mencegah pengguna yang sudah login (User/Admin) untuk kembali ke 
+ * halaman Login/Register secara manual.
+ */
 const PublicRoute = ({ children }) => {
   const token = localStorage.getItem("token");
   return token ? <Navigate to="/dashboard" replace /> : children;
@@ -50,7 +66,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* ===== AUTH ROUTES ===== */}
+        {/* ===== AUTH ROUTES (Gunakan PublicRoute) ===== */}
         <Route 
           path="/login" 
           element={
@@ -69,7 +85,7 @@ export default function App() {
         />
 
         {/* ===== OPEN ROUTES (Akses Pengguna/Tamu Umum) ===== */}
-        {/* User hanya bisa melihat, tidak bisa menambah/mengubah */}
+        {/* Halaman-halaman ini bersifat Read-Only untuk publik */}
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/categories" element={<Category />} />
         <Route path="/sholat/:id" element={<DetailSholat />} />
@@ -77,7 +93,6 @@ export default function App() {
         <Route path="/doa" element={<Doa />} />
 
         {/* ===== ADMIN ONLY ROUTES (Proteksi CRUD & Riwayat) ===== */}
-        {/* Dipindahkan ke AdminRoute agar User tidak bisa akses via URL sekalipun */}
         <Route
           path="/riwayat"
           element={

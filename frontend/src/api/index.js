@@ -10,12 +10,32 @@ const api = axios.create({
   },
 });
 
+// ===== INTERCEPTORS (PENTING AGAR LOGIN SINKRON) =====
+// Otomatis menempelkan token ke setiap request jika user sudah login
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 // ===== AUTH =====
 export const login = (email, password) =>
   api.post("/auth/login", { email, password });
 
-export const register = (name, email, password) =>
-  api.post("/auth/register", { name, email, password });
+/** * Register menggunakan multipart/form-data karena di backend kita 
+ * mendukung upload avatar (multer).
+ */
+export const register = (formData) =>
+  api.post("/auth/register", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
 
 // ===== SHOLAT =====
 export const getAllSholat = () => api.get("/sholat");
@@ -23,10 +43,10 @@ export const getAllSholat = () => api.get("/sholat");
 export const getSholatById = (id) => api.get(`/sholat/${id}`);
 
 // ===== PROTECTED REQUEST EXAMPLE =====
-// Jika token dibutuhkan
-export const getDashboard = (token) =>
-  api.get("/dashboard", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+/**
+ * Sekarang tidak perlu lagi passing token manual sebagai parameter 
+ * karena sudah ditangani oleh Interceptor di atas.
+ */
+export const getDashboard = () => api.get("/dashboard");
 
 export default api;

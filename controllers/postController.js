@@ -2,24 +2,32 @@ const db = require("../config/db");
 const { minioClient, bucketName } = require("../config/minioClient");
 const path = require("path");
 
-/* =============================
-   HELPER: GENERATE IMAGE URL
-============================= */
+/* ============================================================
+    HELPER: Membuat URL Gambar yang bisa diakses Browser
+============================================================ */
 const generateImageUrl = (imageName) => {
   if (!imageName) return null;
-  // Menggunakan 127.0.0.1 agar lebih stabil di lingkungan lokal
-  const host = process.env.MINIO_ENDPOINT || "127.0.0.1";
+
+  let host = process.env.MINIO_ENDPOINT || "127.0.0.1";
+  
+  // Jika menggunakan Docker atau localhost, paksa ke IP 127.0.0.1 
+  // agar browser di sisi client bisa menarik gambar dengan benar.
+  if (host === 'minio' || host === 'localhost') {
+    host = "127.0.0.1";
+  }
+
   const port = process.env.MINIO_PORT || 9000;
   const protocol = process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http';
-  return `${protocol}://${host}:${port}/${bucketName}/${imageName}`;
+  const bucket = bucketName || process.env.MINIO_BUCKET;
+
+  return `${protocol}://${host}:${port}/${bucket}/${imageName}`;
 };
 
 /* =============================
-   GET ALL POSTS
+    GET ALL POSTS
 ============================= */
 exports.getAllPosts = async (req, res) => {
   try {
-    // Mengambil data posts dan join dengan categories
     const result = await db.query(`
       SELECT posts.*, categories.name AS category_name
       FROM posts
@@ -29,7 +37,7 @@ exports.getAllPosts = async (req, res) => {
 
     const data = result.rows.map(post => ({
       ...post,
-      // Menggunakan post.gambar sesuai struktur tabel SQL Anda
+      // Pastikan menggunakan 'post.gambar' sesuai kolom DB Anda
       image_url: generateImageUrl(post.gambar),
     }));
 
@@ -41,7 +49,7 @@ exports.getAllPosts = async (req, res) => {
 };
 
 /* =============================
-   GET POST BY ID
+    GET POST BY ID
 ============================= */
 exports.getPostById = async (req, res) => {
   try {
@@ -70,7 +78,7 @@ exports.getPostById = async (req, res) => {
 };
 
 /* =============================
-   CREATE POST
+    CREATE POST
 ============================= */
 exports.createPost = async (req, res) => {
   try {
@@ -84,7 +92,7 @@ exports.createPost = async (req, res) => {
 
     if (req.file) {
       const ext = path.extname(req.file.originalname);
-      // Membuat nama file unik untuk MinIO
+      // Format nama file unik: timestamp-random.ext
       imageName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${ext}`;
 
       await minioClient.putObject(
@@ -97,7 +105,7 @@ exports.createPost = async (req, res) => {
       console.log(`✅ File ${imageName} berhasil diunggah ke MinIO`);
     }
 
-    // Menggunakan kolom 'gambar' sesuai perintah SQL CREATE TABLE sebelumnya
+    // Simpan NAMA FILE ke kolom 'gambar' di database
     const result = await db.query(`
       INSERT INTO posts (judul, isi, gambar, category_id)
       VALUES ($1, $2, $3, $4)
@@ -119,7 +127,7 @@ exports.createPost = async (req, res) => {
 };
 
 /* =============================
-   UPDATE POST
+    UPDATE POST
 ============================= */
 exports.updatePost = async (req, res) => {
   try {
@@ -146,12 +154,12 @@ exports.updatePost = async (req, res) => {
         { "Content-Type": req.file.mimetype }
       );
 
-      // Hapus file lama jika ada untuk menghemat ruang di MinIO
+      // Hapus file lama di MinIO jika ada
       if (existingPost.rows[0].gambar) {
         try {
           await minioClient.removeObject(bucketName, existingPost.rows[0].gambar);
         } catch (e) {
-          console.warn("⚠️ Gagal menghapus file lama di MinIO");
+          console.warn("⚠️ File lama tidak ditemukan di MinIO, lanjut update...");
         }
       }
       imageName = newImageName;
@@ -182,7 +190,7 @@ exports.updatePost = async (req, res) => {
 };
 
 /* =============================
-   DELETE POST
+    DELETE POST
 ============================= */
 exports.deletePost = async (req, res) => {
   try {
@@ -195,12 +203,12 @@ exports.deletePost = async (req, res) => {
 
     const imageName = postResult.rows[0].gambar;
 
-    // Hapus gambar di MinIO sebelum menghapus record di database
+    // Hapus gambar di MinIO
     if (imageName) {
       try {
         await minioClient.removeObject(bucketName, imageName);
       } catch (e) {
-        console.warn("⚠️ Gagal menghapus file di MinIO");
+        console.warn("⚠️ Gagal menghapus file di MinIO (mungkin sudah terhapus)");
       }
     }
 

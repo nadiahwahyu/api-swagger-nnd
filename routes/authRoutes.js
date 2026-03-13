@@ -2,13 +2,23 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const argon2 = require("argon2");
 const pool = require("../config/db");
-const multer = require("multer"); // Tambahkan ini
-const { minioClient, bucketName } = require("../config/minioClient"); // Tambahkan ini
+const multer = require("multer"); 
+const { minioClient, bucketName } = require("../config/minioClient"); 
 
 const router = express.Router();
 
-// Konfigurasi Multer (simpan di memory sementara)
-const upload = multer({ storage: multer.memoryStorage() });
+// Konfigurasi Multer (simpan di memory sementara untuk dikirim ke MinIO)
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 2 * 1024 * 1024 } // Batas 2MB
+});
+
+/**
+ * @swagger
+ * tags:
+ * name: Auth
+ * description: API untuk Autentikasi User (Register, Login, Refresh, Logout)
+ */
 
 /*
 =================================
@@ -20,7 +30,7 @@ REGISTER (DENGAN MINIO & POSTGRES)
  * /api/auth/register:
  * post:
  * summary: Register user baru dengan foto profil
- * tags: [Authentication]
+ * tags: [Auth]
  * requestBody:
  * required: true
  * content:
@@ -40,6 +50,11 @@ REGISTER (DENGAN MINIO & POSTGRES)
  * avatar:
  * type: string
  * format: binary
+ * responses:
+ * 201:
+ * description: User berhasil didaftarkan
+ * 400:
+ * description: Email atau password tidak valid
  */
 router.post("/register", upload.single("avatar"), async (req, res, next) => {
   try {
@@ -51,7 +66,7 @@ router.post("/register", upload.single("avatar"), async (req, res, next) => {
     }
 
     // 1. Cek email di DB
-    const existingUser = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+    const existingUser = await pool.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [email]);
     if (existingUser.rows.length > 0) {
       return res.status(400).json({ success: false, message: "Email sudah terdaftar" });
     }
@@ -69,18 +84,16 @@ router.post("/register", upload.single("avatar"), async (req, res, next) => {
         );
         avatarUrl = `http://127.0.0.1:9000/${bucketName}/${fileName}`;
       } catch (minioErr) {
-        console.error("MinIO Error:", minioErr.message);
-        // Lanjut saja meski upload gagal, atau hentikan jika wajib foto
+        console.error("⚠️ MinIO Error:", minioErr.message);
       }
     }
 
     // 3. Hash Password & Simpan ke DB
     const hashedPassword = await argon2.hash(password);
     
-    // Pastikan tabel users Anda memiliki kolom 'name' dan 'avatar'
     await pool.query(
       "INSERT INTO users (name, email, password, avatar) VALUES ($1, $2, $3, $4)",
-      [name || 'User', email, hashedPassword, avatarUrl]
+      [name || 'User', email.toLowerCase(), hashedPassword, avatarUrl]
     );
 
     res.status(201).json({
@@ -98,11 +111,41 @@ router.post("/register", upload.single("avatar"), async (req, res, next) => {
 LOGIN (DENGAN DATA USER LENGKAP)
 =================================
 */
+/**
+ * @swagger
+ * /api/auth/login:
+ * post:
+ * summary: Login user untuk mendapatkan token
+ * tags: [Auth]
+ * requestBody:
+ * required: true
+ * content:
+ * application/json:
+ * schema:
+ * type: object
+ * required:
+ * - email
+ * - password
+ * properties:
+ * email:
+ * type: string
+ * password:
+ * type: string
+ * responses:
+ * 200:
+ * description: Login berhasil
+ * 401:
+ * description: Kredensial salah
+ */
 router.post("/login", async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    const result = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    if (!email || !password) {
+        return res.status(400).json({ success: false, message: "Email dan password wajib diisi" });
+    }
+
+    const result = await pool.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [email]);
     if (result.rows.length === 0) {
       return res.status(401).json({ success: false, message: "Email tidak ditemukan" });
     }
@@ -113,23 +156,30 @@ router.post("/login", async (req, res, next) => {
       return res.status(401).json({ success: false, message: "Password salah" });
     }
 
+    const accessSecret = process.env.ACCESS_TOKEN_SECRET || process.env.JWT_SECRET || "access_secret_2026";
+    const refreshSecret = process.env.REFRESH_TOKEN_SECRET || "refresh_secret_2026";
+
     const accessToken = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.ACCESS_TOKEN_SECRET,
-      { expiresIn: process.env.ACCESS_TOKEN_EXPIRES }
+      { id: user.id, email: user.email, role: user.role },
+      accessSecret,
+      { expiresIn: process.env.ACCESS_TOKEN_EXPIRES || '1h' }
     );
 
     const refreshToken = jwt.sign(
       { id: user.id, email: user.email },
-      process.env.REFRESH_TOKEN_SECRET,
-      { expiresIn: process.env.REFRESH_TOKEN_EXPIRES }
+      refreshSecret,
+      { expiresIn: process.env.REFRESH_TOKEN_EXPIRES || '7d' }
     );
 
-    // Simpan refresh token (pastikan tabel refresh_tokens tersedia)
-    await pool.query(
-      "INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)",
-      [user.id, refreshToken]
-    );
+    // Simpan refresh token ke database
+    try {
+        await pool.query(
+          "INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)",
+          [user.id, refreshToken]
+        );
+    } catch (e) {
+        console.error("⚠️ Gagal simpan Refresh Token:", e.message);
+    }
 
     res.json({
       success: true,
@@ -139,7 +189,8 @@ router.post("/login", async (req, res, next) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        avatar: user.avatar
+        avatar: user.avatar,
+        role: user.role
       }
     });
   } catch (error) {
@@ -147,16 +198,36 @@ router.post("/login", async (req, res, next) => {
   }
 });
 
-// ... Sisanya (Refresh Token) tetap sama ...
+/*
+=================================
+REFRESH TOKEN
+=================================
+*/
+/**
+ * @swagger
+ * /api/auth/refresh:
+ * post:
+ * summary: Perbarui Access Token menggunakan Refresh Token
+ * tags: [Auth]
+ * requestBody:
+ * required: true
+ * content:
+ * application/json:
+ * schema:
+ * type: object
+ * properties:
+ * refreshToken:
+ * type: string
+ * responses:
+ * 200:
+ * description: Token berhasil diperbarui
+ */
 router.post("/refresh", async (req, res, next) => {
     try {
       const { refreshToken } = req.body;
   
       if (!refreshToken) {
-        return res.status(401).json({
-          success: false,
-          message: "Refresh token diperlukan",
-        });
+        return res.status(401).json({ success: false, message: "Refresh token diperlukan" });
       }
   
       const tokenResult = await pool.query(
@@ -165,38 +236,33 @@ router.post("/refresh", async (req, res, next) => {
       );
   
       if (tokenResult.rows.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: "Refresh token tidak valid",
-        });
+        return res.status(403).json({ success: false, message: "Refresh token tidak valid" });
       }
   
+      const accessSecret = process.env.ACCESS_TOKEN_SECRET || process.env.JWT_SECRET || "access_secret_2026";
+      const refreshSecret = process.env.REFRESH_TOKEN_SECRET || "refresh_secret_2026";
+
       jwt.verify(
         refreshToken,
-        process.env.REFRESH_TOKEN_SECRET,
+        refreshSecret,
         async (err, decoded) => {
           if (err) {
-            return res.status(403).json({
-              success: false,
-              message: "Refresh token expired / invalid",
-            });
+            return res.status(403).json({ success: false, message: "Refresh token expired / invalid" });
           }
   
-          await pool.query(
-            "DELETE FROM refresh_tokens WHERE token = $1",
-            [refreshToken]
-          );
+          // Rotasi Token
+          await pool.query("DELETE FROM refresh_tokens WHERE token = $1", [refreshToken]);
   
           const newAccessToken = jwt.sign(
             { id: decoded.id, email: decoded.email },
-            process.env.ACCESS_TOKEN_SECRET,
-            { expiresIn: process.env.ACCESS_TOKEN_EXPIRES }
+            accessSecret,
+            { expiresIn: process.env.ACCESS_TOKEN_EXPIRES || '1h' }
           );
   
           const newRefreshToken = jwt.sign(
             { id: decoded.id, email: decoded.email },
-            process.env.REFRESH_TOKEN_SECRET,
-            { expiresIn: process.env.REFRESH_TOKEN_EXPIRES }
+            refreshSecret,
+            { expiresIn: process.env.REFRESH_TOKEN_EXPIRES || '7d' }
           );
   
           await pool.query(
@@ -214,6 +280,44 @@ router.post("/refresh", async (req, res, next) => {
     } catch (error) {
       next(error);
     }
-  });
+});
+
+/*
+=================================
+LOGOUT (PEMBERSIHAN DATABASE)
+=================================
+*/
+/**
+ * @swagger
+ * /api/auth/logout:
+ * post:
+ * summary: Logout dan hapus refresh token dari server
+ * tags: [Auth]
+ * requestBody:
+ * required: true
+ * content:
+ * application/json:
+ * schema:
+ * type: object
+ * properties:
+ * refreshToken:
+ * type: string
+ * responses:
+ * 200:
+ * description: Berhasil logout
+ */
+router.post("/logout", async (req, res, next) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+        return res.status(400).json({ success: false, message: "Token diperlukan untuk logout" });
+    }
+    await pool.query("DELETE FROM refresh_tokens WHERE token = $1", [refreshToken]);
+    
+    res.json({ success: true, message: "Berhasil logout dan token dihapus." });
+  } catch (error) {
+    next(error);
+  }
+});
 
 module.exports = router;
